@@ -1,0 +1,148 @@
+name: Remote OpenCode - Darussunnah Parung
+
+on:
+  workflow_dispatch:
+
+jobs:
+  remote-opencode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+
+      # ==========================================
+      # 1. Install dependencies
+      # ==========================================
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            curl \
+            git \
+            openssh-server
+
+      # ==========================================
+      # 2. Create runner user
+      # ==========================================
+      - name: Create runner user
+        env:
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          if ! id runner >/dev/null 2>&1; then
+            sudo useradd \
+              --create-home \
+              --shell /bin/bash \
+              runner
+          fi
+
+          echo "runner:${SSH_PASSWORD}" | sudo chpasswd
+
+          echo "runner ALL=(ALL) NOPASSWD:ALL" \
+            | sudo tee /etc/sudoers.d/runner
+
+          sudo chmod 440 /etc/sudoers.d/runner
+
+      # ==========================================
+      # 3. Install OpenCode
+      # ==========================================
+      - name: Install OpenCode
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+          export PATH="$HOME/.opencode/bin:$PATH"
+
+          echo "OpenCode version:"
+          opencode --version
+
+      # ==========================================
+      # 4. Make OpenCode available for runner
+      # ==========================================
+      - name: Configure OpenCode for runner
+        run: |
+          sudo mkdir -p /home/runner/.opencode/bin
+
+          if [ -d "$HOME/.opencode/bin" ]; then
+            sudo cp -a "$HOME/.opencode/bin/." \
+              /home/runner/.opencode/bin/
+          fi
+
+          sudo chown -R runner:runner \
+            /home/runner/.opencode
+
+          sudo tee /home/runner/.bashrc.d-opencode >/dev/null <<'EOF'
+          export PATH="$HOME/.opencode/bin:$PATH"
+          EOF
+
+          sudo chown runner:runner \
+            /home/runner/.bashrc.d-opencode
+
+          if ! sudo grep -q "bashrc.d-opencode" /home/runner/.bashrc; then
+            echo "source /home/runner/.bashrc.d-opencode" \
+              | sudo tee -a /home/runner/.bashrc
+          fi
+
+          sudo chown runner:runner /home/runner/.bashrc
+
+      # ==========================================
+      # 5. Configure SSH
+      # ==========================================
+      - name: Configure SSH
+        run: |
+          sudo mkdir -p /run/sshd
+
+          sudo sed -i \
+            's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' \
+            /etc/ssh/sshd_config
+
+          sudo sed -i \
+            's/^#\?PermitRootLogin.*/PermitRootLogin no/' \
+            /etc/ssh/sshd_config
+
+          sudo sshd -t
+
+          sudo systemctl restart ssh || \
+            sudo service ssh restart
+
+          echo "SSH status:"
+          sudo systemctl status ssh --no-pager || true
+
+      # ==========================================
+      # 6. Start Cloudflare SSH
+      # ==========================================
+      - name: Start SSH access
+        uses: valeriangalliat/action-sshd-cloudflared@v4
+
+      # ==========================================
+      # 7. Connection information
+      # ==========================================
+      - name: Show connection information
+        run: |
+          echo ""
+          echo "=================================================="
+          echo "      REMOTE OPENCODE RUNNER READY"
+          echo "=================================================="
+          echo ""
+          echo "SSH USER:"
+          echo "  runner"
+          echo ""
+          echo "SSH PASSWORD:"
+          echo "  GitHub Secret: SSH_PASSWORD"
+          echo ""
+          echo "Setelah SSH masuk:"
+          echo ""
+          echo "  opencode"
+          echo ""
+          echo "=================================================="
+
+      # ==========================================
+      # 8. Keep runner alive
+      # ==========================================
+      - name: Keep runner alive
+        run: |
+          echo "Runner aktif maksimal 6 jam."
+
+          while true; do
+            sleep 60
+          done
